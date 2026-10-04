@@ -1,12 +1,17 @@
 package com.kianabc.freshfix
 
 import android.Manifest
+import android.content.ContentUris
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.location.Location
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
+import android.provider.MediaStore
+import android.util.Size
 import android.view.OrientationEventListener
 import android.view.Surface
 import android.view.WindowManager
@@ -22,6 +27,7 @@ import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -50,11 +56,15 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -65,9 +75,11 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.maplibre.android.MapLibre
 import java.io.File
 import java.text.SimpleDateFormat
@@ -90,6 +102,11 @@ class MainActivity : ComponentActivity() {
     private val photoCount = MutableStateFlow(0)
     private val lastResult = MutableStateFlow<String?>(null)
     private val pending = MutableStateFlow(0)
+    private val lastPhoto = MutableStateFlow<Uri?>(null)
+
+    // File names are per-second; a second shot in the same second gets a _2, _3 suffix.
+    private var lastBaseName = ""
+    private var sameSecondCount = 0
 
     // The activity is locked to portrait, so follow the physical orientation by hand
     // to keep landscape shots of signs the right way up.
@@ -120,6 +137,7 @@ class MainActivity : ComponentActivity() {
         addresses = AddressLookup(this, offlineAreas)
         downloader = AreaDownloader(this, offlineAreas)
         photoCount.value = log.count()
+        lifecycleScope.launch { lastPhoto.value = withContext(Dispatchers.IO) { findLatestPhoto() } }
 
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
@@ -163,7 +181,10 @@ class MainActivity : ComponentActivity() {
     private fun takePhoto() {
         val shutterNanos = SystemClock.elapsedRealtimeNanos()
         val shutterWallMs = System.currentTimeMillis()
-        val fileName = "FreshFix_" + SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date(shutterWallMs)) + ".jpg"
+        val baseName = "FreshFix_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date(shutterWallMs))
+        sameSecondCount = if (baseName == lastBaseName) sameSecondCount + 1 else 1
+        lastBaseName = baseName
+        val fileName = baseName + (if (sameSecondCount > 1) "_$sameSecondCount" else "") + ".jpg"
         val capture = File(cacheDir, "raw_$fileName")
         pending.value++
 
@@ -202,11 +223,11 @@ class MainActivity : ComponentActivity() {
             else -> FixStatus.OK
         }
 
-        saver.save(capture, fileName, shutterWallMs, fix, address)
+        lastPhoto.value = saver.save(capture, fileName, shutterWallMs, fix, address)
         log.append(
             PhotoRecord(
                 fileName = fileName,
-                takenAt = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", Locale.US).format(Date(shutterWallMs)),
+                takenAt = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US).format(Date(shutterWallMs)),
                 latitude = fix?.latitude,
                 longitude = fix?.longitude,
                 accuracyM = fix?.accuracy,
@@ -223,11 +244,29 @@ class MainActivity : ComponentActivity() {
         photoCount.value = log.count()
         lastResult.value = when (status) {
             FixStatus.OK -> "Saved #${photoCount.value} · ±%.0f m".format(fix!!.accuracy)
-            FixStatus.WEAK -> "Saved #${photoCount.value} · WEAK fix ±%.0f m, %.1f s off".format(
-                fix!!.accuracy, abs(offsetMs!!) / 1000.0
-            )
+            FixStatus.WEAK -> "Saved #${photoCount.value} · WEAK fix ±%.0f m".format(fix!!.accuracy) +
+                if (abs(offsetMs!!) > SHOW_AGE_AFTER_MS) ", ${abs(offsetMs) / 1000} s off" else ""
             FixStatus.NO_FIX -> "Saved #${photoCount.value} · NO GPS FIX"
         }
+    }
+
+    /** Newest photo this app saved, so the thumbnail survives restarts. */
+    private fun findLatestPhoto(): Uri? = contentResolver.query(
+        MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+        arrayOf(MediaStore.Images.Media._ID),
+        "${MediaStore.Images.Media.RELATIVE_PATH} = ?",
+        arrayOf(PhotoSaver.RELATIVE_PATH + "/"),
+        "${MediaStore.Images.Media.DATE_ADDED} DESC",
+    )?.use { c ->
+        if (c.moveToFirst()) ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, c.getLong(0)) else null
+    }
+
+    private fun openPhoto(uri: Uri) {
+        val view = Intent(Intent.ACTION_VIEW)
+            .setDataAndType(uri, "image/jpeg")
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        runCatching { startActivity(view) }
+            .onFailure { Toast.makeText(this, "No gallery app found", Toast.LENGTH_SHORT).show() }
     }
 
     private fun isMock(location: Location): Boolean =
@@ -293,18 +332,18 @@ class MainActivity : ComponentActivity() {
         LaunchedEffect(Unit) {
             while (true) {
                 now = SystemClock.elapsedRealtimeNanos()
-                delay(250)
+                delay(1_000)
             }
         }
 
         val current = fix
-        val ageSec = current?.let { (now - it.elapsedRealtimeNanos) / 1e9 }
+        val ageSec = current?.let { (now - it.elapsedRealtimeNanos) / 1_000_000_000 }
         val (color, text) = when {
             current == null -> Color(0xFFC62828) to "Waiting for GPS…  ($satellites sats)"
-            ageSec!! > STALE_FIX_SEC -> Color(0xFFC62828) to "GPS lost · last fix %.0f s ago".format(ageSec)
+            ageSec!! > STALE_FIX_SEC -> Color(0xFFC62828) to "GPS lost · last fix $ageSec s ago"
             current.accuracy > GOOD_ACCURACY_M -> Color(0xFFF9A825) to
                 "GPS weak · ±%.0f m · %d sats".format(current.accuracy, satellites)
-            else -> Color(0xFF2E7D32) to "GPS ±%.0f m · %.1f s old · %d sats".format(current.accuracy, ageSec, satellites)
+            else -> Color(0xFF2E7D32) to "GPS ±%.0f m · %d sats".format(current.accuracy, satellites)
         }
         Column(
             Modifier.fillMaxWidth().padding(12.dp)
@@ -326,6 +365,7 @@ class MainActivity : ComponentActivity() {
         val count by photoCount.collectAsState()
         val result by lastResult.collectAsState()
         val inFlight by pending.collectAsState()
+        val photo by lastPhoto.collectAsState()
 
         Column(
             Modifier.fillMaxWidth().background(Color.Black.copy(alpha = 0.5f)).padding(16.dp),
@@ -341,10 +381,13 @@ class MainActivity : ComponentActivity() {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    "$count photos" + if (inFlight > 0) "\nsaving $inFlight…" else "",
-                    color = Color.White, fontSize = 14.sp, modifier = Modifier.width(96.dp),
-                )
+                Column(Modifier.width(96.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    LastPhotoThumbnail(photo)
+                    Text(
+                        if (inFlight > 0) "saving $inFlight…" else "$count photos",
+                        color = Color.White, fontSize = 12.sp,
+                    )
+                }
                 Box(
                     Modifier.size(78.dp).border(4.dp, Color.White, CircleShape).padding(8.dp)
                         .background(Color.White, CircleShape).clickable { takePhoto() }
@@ -355,6 +398,25 @@ class MainActivity : ComponentActivity() {
                         Text("Export log", color = Color.White, textAlign = TextAlign.Center)
                     }
                 }
+            }
+        }
+    }
+
+    @Composable
+    private fun LastPhotoThumbnail(uri: Uri?) {
+        val thumbnail by produceState<Bitmap?>(null, uri) {
+            value = uri?.let {
+                withContext(Dispatchers.IO) { runCatching { contentResolver.loadThumbnail(it, Size(192, 192), null) }.getOrNull() }
+            }
+        }
+        val shape = RoundedCornerShape(10.dp)
+        Box(
+            Modifier.size(56.dp).clip(shape).border(2.dp, Color.White, shape).background(Color.DarkGray)
+                .clickable(enabled = uri != null) { uri?.let(::openPhoto) },
+            contentAlignment = Alignment.Center,
+        ) {
+            thumbnail?.let {
+                Image(it.asImageBitmap(), contentDescription = "Last photo", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
             }
         }
     }
@@ -390,6 +452,7 @@ class MainActivity : ComponentActivity() {
         )
         private const val GOOD_ACCURACY_M = 15f
         private const val GOOD_OFFSET_MS = 2_000L
-        private const val STALE_FIX_SEC = 5.0
+        private const val STALE_FIX_SEC = 5L
+        private const val SHOW_AGE_AFTER_MS = 5_000L
     }
 }

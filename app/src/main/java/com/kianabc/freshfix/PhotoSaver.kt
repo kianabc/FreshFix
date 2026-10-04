@@ -126,7 +126,7 @@ class PhotoSaver(private val context: Context) {
         val values = ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
             put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-            put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/FreshFix")
+            put(MediaStore.Images.Media.RELATIVE_PATH, RELATIVE_PATH)
             put(MediaStore.Images.Media.IS_PENDING, 1)
         }
         val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
@@ -138,5 +138,6 @@ class PhotoSaver(private val context: Context) {
 
     companion object {
         private const val JPEG_QUALITY = 95
+        const val RELATIVE_PATH = "Pictures/FreshFix"
     }
 }

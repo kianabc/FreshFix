@@ -10,7 +10,7 @@ FreshFix never uses a "last known" location:
 
 - While the camera is open it streams raw GNSS fixes from the GPS chip once per second (`LocationManager.GPS_PROVIDER`, no Wi-Fi or cell-tower guesses, no Google Play Services).
 - When you press the shutter it records the exact time, then uses the fix **closest in time to that moment**. If the next fix is due, it waits for it (up to 4 s).
-- The status bar shows fix accuracy, fix age and satellites in use: green for a good fix, amber for a weak one, red when there's no fix or it's lost.
+- The status bar shows fix accuracy and satellites in use: green for a good fix, amber for a weak one, red when there's no fix or the last fix is more than 5 s old.
 
 ## What each photo gets
 
@@ -24,12 +24,14 @@ FreshFix never uses a "last known" location:
 
 **EXIF:** GPS lat/lon/altitude/speed, GPS timestamp, horizontal accuracy (`GPSHPositioningError`), capture time with timezone offset, and the address as `ImageDescription`.
 
+**Saved to:** `Pictures/FreshFix` on the phone. Tap the thumbnail at the bottom-left of the camera to open the latest photo in your gallery. In Google Photos the folder is under **Collections → On this device → FreshFix**, and it isn't backed up unless you turn on backup for that folder.
+
 **Log:** a row in `freshfix_log.csv`. Tap **Export log** to share it.
 
 | column | meaning |
 |---|---|
-| `photo` | file name in `Pictures/FreshFix` |
-| `taken_at` | shutter time, ISO 8601 with offset |
+| `photo` | file name in `Pictures/FreshFix` (`FreshFix_YYYYMMDD_HHMMSS.jpg`, `_2` etc. for several in one second) |
+| `taken_at` | shutter time to the second, ISO 8601 with offset |
 | `latitude`, `longitude` | from the matched fix |
 | `accuracy_m` | horizontal accuracy reported by GNSS |
 | `fix_offset_ms` | fix time minus shutter time (negative = fix just before the shot) |
