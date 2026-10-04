@@ -4,6 +4,8 @@ import android.content.Context
 import android.location.Address
 import android.location.Geocoder
 import android.location.Location
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Build
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -12,18 +14,29 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
 
 /**
- * Reverse-geocodes a fix to a street address using the phone's built-in geocoder.
- * Needs a data connection; returns null offline or after [timeoutMs] so a photo is never held up.
+ * Reverse-geocodes a fix to a street address. Uses the phone's built-in geocoder when online,
+ * and falls back to downloaded offline areas. Returns null rather than holding up a photo.
  */
-class AddressLookup(context: Context) {
+class AddressLookup(context: Context, private val offline: OfflineAreaStore) {
 
     private val geocoder = Geocoder(context)
+    private val connectivity = context.getSystemService(ConnectivityManager::class.java)
 
-    suspend fun lookup(location: Location, timeoutMs: Long = 4_000): String? {
+    suspend fun lookup(location: Location): String? {
+        if (isOnline()) online(location)?.let { return it }
+        return withContext(Dispatchers.IO) { offline.lookup(location.latitude, location.longitude) }
+    }
+
+    private suspend fun online(location: Location, timeoutMs: Long = 4_000): String? {
         if (!Geocoder.isPresent()) return null
         return withTimeoutOrNull(timeoutMs) {
             runCatching { fetch(location) }.getOrNull()?.let(::format)
         }
+    }
+
+    private fun isOnline(): Boolean {
+        val caps = connectivity.getNetworkCapabilities(connectivity.activeNetwork) ?: return false
+        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
     }
 
     private suspend fun fetch(location: Location): Address? =

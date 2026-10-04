@@ -44,6 +44,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -67,6 +68,7 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import org.maplibre.android.MapLibre
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -79,6 +81,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var log: PhotoLog
     private lateinit var saver: PhotoSaver
     private lateinit var addresses: AddressLookup
+    private lateinit var downloader: AreaDownloader
 
     private val imageCapture = ImageCapture.Builder()
         .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
@@ -109,10 +112,13 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
+        MapLibre.getInstance(this)
+        val offlineAreas = OfflineAreaStore(this)
         gps = GpsTracker(this)
         log = PhotoLog(this)
         saver = PhotoSaver(this)
-        addresses = AddressLookup(this)
+        addresses = AddressLookup(this, offlineAreas)
+        downloader = AreaDownloader(this, offlineAreas)
         photoCount.value = log.count()
 
         setContent {
@@ -126,8 +132,11 @@ class MainActivity : ComponentActivity() {
                 }
                 LaunchedEffect(Unit) { if (!granted) launcher.launch(PERMISSIONS) }
 
-                if (granted) {
-                    CameraScreen()
+                var showMap by remember { mutableStateOf(false) }
+                if (granted && showMap) {
+                    MapScreen(gps, downloader, log, lifecycleScope, onBack = { showMap = false })
+                } else if (granted) {
+                    CameraScreen(onOpenMap = { showMap = true })
                 } else {
                     PermissionScreen { launcher.launch(PERMISSIONS) }
                 }
@@ -239,13 +248,13 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun CameraScreen() {
+    private fun CameraScreen(onOpenMap: () -> Unit) {
         Box(Modifier.fillMaxSize().background(Color.Black)) {
             CameraPreview(Modifier.fillMaxSize())
             Column(Modifier.fillMaxSize().safeDrawingPadding()) {
                 GpsStatusBar()
                 Spacer(Modifier.weight(1f))
-                BottomControls()
+                BottomControls(onOpenMap)
             }
         }
     }
@@ -253,6 +262,13 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun CameraPreview(modifier: Modifier) {
         val lifecycleOwner = LocalLifecycleOwner.current
+        val context = LocalContext.current
+        DisposableEffect(Unit) {
+            onDispose {
+                val future = ProcessCameraProvider.getInstance(context)
+                if (future.isDone) future.get().unbindAll()
+            }
+        }
         AndroidView(
             modifier = modifier,
             factory = { ctx ->
@@ -306,7 +322,7 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun BottomControls() {
+    private fun BottomControls(onOpenMap: () -> Unit) {
         val count by photoCount.collectAsState()
         val result by lastResult.collectAsState()
         val inFlight by pending.collectAsState()
@@ -333,8 +349,11 @@ class MainActivity : ComponentActivity() {
                     Modifier.size(78.dp).border(4.dp, Color.White, CircleShape).padding(8.dp)
                         .background(Color.White, CircleShape).clickable { takePhoto() }
                 )
-                TextButton(onClick = ::shareLog, modifier = Modifier.width(96.dp)) {
-                    Text("Export\nlog", color = Color.White, textAlign = TextAlign.Center)
+                Column(Modifier.width(96.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    TextButton(onClick = onOpenMap) { Text("Map", color = Color.White) }
+                    TextButton(onClick = ::shareLog) {
+                        Text("Export log", color = Color.White, textAlign = TextAlign.Center)
+                    }
                 }
             }
         }

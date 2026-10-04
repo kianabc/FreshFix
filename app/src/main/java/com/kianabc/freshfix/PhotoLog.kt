@@ -11,6 +11,20 @@ class PhotoLog(context: Context) {
     fun count(): Int =
         if (!file.exists()) 0 else file.useLines { lines -> (lines.count() - 1).coerceAtLeast(0) }
 
+    /** Logged photos that have a position, for the map. */
+    fun points(): List<PhotoPoint> {
+        if (!file.exists()) return emptyList()
+        return file.useLines { lines ->
+            lines.drop(1).mapNotNull { line ->
+                // Only the trailing address column can contain commas, so a bounded split is safe.
+                val cols = line.split(",", limit = 13)
+                val lat = cols.getOrNull(2)?.toDoubleOrNull() ?: return@mapNotNull null
+                val lon = cols.getOrNull(3)?.toDoubleOrNull() ?: return@mapNotNull null
+                PhotoPoint(cols[0], lat, lon, cols.getOrNull(11) ?: "")
+            }.toList()
+        }
+    }
+
     @Synchronized
     fun append(record: PhotoRecord) {
         if (!file.exists()) file.writeText(HEADER + "\n")
@@ -60,5 +74,7 @@ data class PhotoRecord(
         if (value.any { it == ',' || it == '"' || it == '\n' }) "\"" + value.replace("\"", "\"\"") + "\""
         else value
 }
+
+data class PhotoPoint(val fileName: String, val lat: Double, val lon: Double, val status: String)
 
 enum class FixStatus { OK, WEAK, NO_FIX }

@@ -41,9 +41,22 @@ FreshFix never uses a "last known" location:
 
 The CSV imports directly into Google My Maps (pick `latitude`/`longitude` as the position columns), Google Earth, QGIS or a spreadsheet.
 
+## Offline maps
+
+Tap **Map** to see where every photo was taken (green = good fix, amber = weak, red = no fix) and your current position.
+
+Before heading somewhere with poor signal, pan and zoom the map to the area and tap **Download this area for offline** (up to 15 × 15 km per area). This saves two things:
+
+- **Map tiles** from [OpenFreeMap](https://openfreemap.org) (OpenStreetMap data), so the map works with no connection.
+- **Street addresses and named streets** from OpenStreetMap via the Overpass API, stored on the phone.
+
+When there's no data connection, the photo stamp uses the downloaded data: the nearest house address within 40 m, otherwise `near <street>` for the nearest named street within 60 m. Online, the phone's own geocoder is used first. Downloaded areas show as blue boxes on the map and can be shown or deleted from **Offline areas**.
+
+OpenStreetMap address coverage varies by city. Where house numbers are missing, you'll get the street-name fallback.
+
 ## Notes
 
-- The address comes from the phone's built-in geocoder and needs a data connection. Offline, the photo is stamped "Address unavailable" and the coordinates are still exact.
+- With no connection and no downloaded area, the photo is stamped "Address unavailable". The coordinates are always exact.
 - GPS needs open sky. Wait for the bar to turn green after opening the app; the first fix can take 10–30 s.
 - Photos are saved with the stamp only; no unstamped copy is kept.
 
