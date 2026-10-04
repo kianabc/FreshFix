@@ -4,18 +4,11 @@ import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.Canvas
-import android.graphics.Color
 import android.graphics.Matrix
-import android.graphics.Paint
-import android.graphics.Typeface
 import android.location.Location
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
-import android.text.Layout
-import android.text.StaticLayout
-import android.text.TextPaint
 import androidx.exifinterface.media.ExifInterface
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -35,6 +28,7 @@ class PhotoSaver(private val context: Context) {
 
     // A full-resolution bitmap is tens of MB; stamp one at a time so rapid shots can't exhaust the heap.
     private val stampLock = Mutex()
+    private val stamp = StampRenderer(android.text.format.DateFormat.is24HourFormat(context))
 
     suspend fun save(
         capture: File,
@@ -42,11 +36,12 @@ class PhotoSaver(private val context: Context) {
         shutterWallMs: Long,
         location: Location?,
         address: String?,
+        status: FixStatus,
     ): Uri = stampLock.withLock { withContext(Dispatchers.Default) {
         val stamped = File(context.cacheDir, "stamped_$fileName")
         try {
             val bitmap = loadUpright(capture)
-            drawStamp(bitmap, stampLines(shutterWallMs, location, address))
+            stamp.draw(bitmap, shutterWallMs, location, address, status)
             stamped.outputStream().use { bitmap.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, it) }
             bitmap.recycle()
 
@@ -69,35 +64,6 @@ class PhotoSaver(private val context: Context) {
         )
         decoded.recycle()
         return if (rotated.isMutable) rotated else rotated.copy(Bitmap.Config.ARGB_8888, true).also { rotated.recycle() }
-    }
-
-    private fun stampLines(shutterWallMs: Long, location: Location?, address: String?): List<String> {
-        val time = SimpleDateFormat("yyyy-MM-dd HH:mm:ss z", Locale.US).format(Date(shutterWallMs))
-        val coords = if (location == null) "GPS: no fix" else
-            "%.6f, %.6f  ±%.0f m".format(Locale.US, location.latitude, location.longitude, location.accuracy)
-        return listOfNotNull(time, address ?: if (location != null) "Address unavailable" else null, coords)
-    }
-
-    private fun drawStamp(bitmap: Bitmap, lines: List<String>) {
-        val canvas = Canvas(bitmap)
-        val shortSide = minOf(bitmap.width, bitmap.height)
-        val textPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE
-            textSize = shortSide / 28f
-            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-            setShadowLayer(textSize / 8f, 0f, 0f, Color.BLACK)
-        }
-        val padding = (shortSide / 40f).toInt()
-        val layout = StaticLayout.Builder
-            .obtain(lines.joinToString("\n"), 0, lines.joinToString("\n").length, textPaint, bitmap.width - padding * 2)
-            .setAlignment(Layout.Alignment.ALIGN_NORMAL)
-            .build()
-        val top = bitmap.height - layout.height - padding * 2f
-        canvas.drawRect(0f, top, bitmap.width.toFloat(), bitmap.height.toFloat(), Paint().apply { color = 0x99000000.toInt() })
-        canvas.save()
-        canvas.translate(padding.toFloat(), top + padding)
-        layout.draw(canvas)
-        canvas.restore()
     }
 
     private fun writeExif(file: File, shutterWallMs: Long, location: Location?, address: String?) {

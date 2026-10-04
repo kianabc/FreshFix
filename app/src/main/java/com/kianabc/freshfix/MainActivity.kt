@@ -6,12 +6,14 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.location.Location
+import android.media.MediaActionSound
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
 import android.provider.MediaStore
 import android.util.Size
+import android.view.HapticFeedbackConstants
 import android.view.OrientationEventListener
 import android.view.Surface
 import android.view.WindowManager
@@ -27,10 +29,15 @@ import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -61,7 +68,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -103,6 +112,8 @@ class MainActivity : ComponentActivity() {
     private val lastResult = MutableStateFlow<String?>(null)
     private val pending = MutableStateFlow(0)
     private val lastPhoto = MutableStateFlow<Uri?>(null)
+    private val shutterCount = MutableStateFlow(0)
+    private val shutterSound = MediaActionSound().apply { load(MediaActionSound.SHUTTER_CLICK) }
 
     // File names are per-second; a second shot in the same second gets a _2, _3 suffix.
     private var lastBaseName = ""
@@ -178,9 +189,20 @@ class MainActivity : ComponentActivity() {
         ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
     }
 
+    override fun onDestroy() {
+        super.onDestroy()
+        shutterSound.release()
+    }
+
     private fun takePhoto() {
         val shutterNanos = SystemClock.elapsedRealtimeNanos()
         val shutterWallMs = System.currentTimeMillis()
+        shutterSound.play(MediaActionSound.SHUTTER_CLICK)
+        window.decorView.performHapticFeedback(
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) HapticFeedbackConstants.CONFIRM
+            else HapticFeedbackConstants.VIRTUAL_KEY
+        )
+        shutterCount.value++
         val baseName = "FreshFix_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date(shutterWallMs))
         sameSecondCount = if (baseName == lastBaseName) sameSecondCount + 1 else 1
         lastBaseName = baseName
@@ -223,7 +245,7 @@ class MainActivity : ComponentActivity() {
             else -> FixStatus.OK
         }
 
-        lastPhoto.value = saver.save(capture, fileName, shutterWallMs, fix, address)
+        lastPhoto.value = saver.save(capture, fileName, shutterWallMs, fix, address, status)
         log.append(
             PhotoRecord(
                 fileName = fileName,
@@ -290,6 +312,7 @@ class MainActivity : ComponentActivity() {
     private fun CameraScreen(onOpenMap: () -> Unit) {
         Box(Modifier.fillMaxSize().background(Color.Black)) {
             CameraPreview(Modifier.fillMaxSize())
+            ShutterBlink()
             Column(Modifier.fillMaxSize().safeDrawingPadding()) {
                 GpsStatusBar()
                 Spacer(Modifier.weight(1f))
@@ -388,9 +411,13 @@ class MainActivity : ComponentActivity() {
                         color = Color.White, fontSize = 12.sp,
                     )
                 }
+                val interaction = remember { MutableInteractionSource() }
+                val pressed by interaction.collectIsPressedAsState()
+                val buttonScale by animateFloatAsState(if (pressed) 0.85f else 1f, tween(90), label = "shutter")
                 Box(
-                    Modifier.size(78.dp).border(4.dp, Color.White, CircleShape).padding(8.dp)
-                        .background(Color.White, CircleShape).clickable { takePhoto() }
+                    Modifier.size(78.dp).scale(buttonScale).border(4.dp, Color.White, CircleShape).padding(8.dp)
+                        .background(Color.White, CircleShape)
+                        .clickable(interactionSource = interaction, indication = null) { takePhoto() }
                 )
                 Column(Modifier.width(96.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     TextButton(onClick = onOpenMap) { Text("Map", color = Color.White) }
@@ -399,6 +426,21 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+        }
+    }
+
+    /** Blinks the preview to black and back each time the shutter fires, like the stock camera. */
+    @Composable
+    private fun ShutterBlink() {
+        val shots by shutterCount.collectAsState()
+        val blackout = remember { Animatable(0f) }
+        LaunchedEffect(shots) {
+            if (shots == 0) return@LaunchedEffect
+            blackout.animateTo(1f, tween(durationMillis = 40))
+            blackout.animateTo(0f, tween(durationMillis = 220))
+        }
+        if (blackout.value > 0f) {
+            Box(Modifier.fillMaxSize().alpha(blackout.value).background(Color.Black))
         }
     }
 

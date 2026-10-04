@@ -14,13 +14,7 @@ FreshFix never uses a "last known" location:
 
 ## What each photo gets
 
-**Burned into the image** (bottom band, follows device rotation):
-
-```
-2026-10-04 14:32:07 MDT
-123 Main St, Salt Lake City, UT 84101, USA
-40.760779, -111.891047  ±4 m
-```
+**Burned into the image:** a card in the bottom-left corner (follows device rotation) with the time, date and timezone, street address, coordinates and GPS accuracy. Its accent colour shows fix quality: green for good, amber for weak, red for no fix.
 
 **EXIF:** GPS lat/lon/altitude/speed, GPS timestamp, horizontal accuracy (`GPSHPositioningError`), capture time with timezone offset, and the address as `ImageDescription`.
 
